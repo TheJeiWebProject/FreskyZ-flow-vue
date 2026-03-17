@@ -1,90 +1,114 @@
 <template>
-  <div class="fresky-flow" @click="emit('update:selected-node-id', null)">
-    <div
-      class="fresky-flow__board"
-      :style="{ width: `${boardWidth}px`, height: `${boardHeight}px` }"
-    >
-      <svg class="fresky-flow__edges" :viewBox="`0 0 ${boardWidth} ${boardHeight}`" preserveAspectRatio="none">
-        <defs>
-          <marker
-            v-for="edge in edgeViews"
-            :key="edge.markerId"
-            :id="edge.markerId"
-            markerWidth="10"
-            markerHeight="10"
-            refX="9"
-            refY="5"
-            orient="auto"
-            markerUnits="strokeWidth"
-          >
-            <path d="M0,0 L10,5 L0,10 z" :fill="edge.stroke" />
-          </marker>
-        </defs>
-        <g v-for="edge in edgeViews" :key="edge.id">
-          <path
-            :d="edge.path"
-            fill="none"
-            :stroke="edge.stroke"
-            :stroke-width="edge.lineWidth"
-            :stroke-opacity="edge.opacity"
-            :stroke-dasharray="edge.strokeDasharray"
-            stroke-linecap="round"
-            :marker-end="`url(#${edge.markerId})`"
-          />
-        </g>
-      </svg>
+  <div
+    ref="viewportEl"
+    class="fresky-flow"
+    :class="{ 'fresky-flow--panning': isPanning }"
+    @click="onBackgroundClick"
+    @wheel.prevent="onWheel"
+    @pointerdown="onPointerDown"
+  >
+    <div class="fresky-flow__toolbar">
+      <button class="fresky-flow__tool-btn" @click.stop="zoomOut">-</button>
+      <button class="fresky-flow__tool-btn" @click.stop="zoomIn">+</button>
+      <button class="fresky-flow__tool-btn fresky-flow__tool-btn--reset" @click.stop="resetView">1:1</button>
+      <span class="fresky-flow__zoom-text">{{ Math.round(zoom * 100) }}%</span>
+    </div>
 
+    <div class="fresky-flow__stage" :style="stageStyle">
       <div
-        v-for="edge in edgeViews"
-        :key="`${edge.id}:label`"
-        class="fresky-flow__edge-label"
-        :style="{ left: `${edge.labelX}px`, top: `${edge.labelY}px` }"
+        class="fresky-flow__board"
+        :style="{ width: `${boardWidth}px`, height: `${boardHeight}px` }"
       >
-        {{ edge.label }}
-      </div>
+        <svg class="fresky-flow__edges" :viewBox="`0 0 ${boardWidth} ${boardHeight}`" preserveAspectRatio="none">
+          <defs>
+            <marker
+              v-for="edge in edgeViews"
+              :key="edge.markerId"
+              :id="edge.markerId"
+              markerWidth="9"
+              markerHeight="9"
+              refX="8"
+              refY="4.5"
+              orient="auto"
+              markerUnits="strokeWidth"
+            >
+              <path d="M0,0 L9,4.5 L0,9 z" :fill="edge.stroke" />
+            </marker>
+          </defs>
+          <g v-for="edge in edgeViews" :key="edge.id">
+            <path
+              :d="edge.path"
+              fill="none"
+              :stroke="edge.stroke"
+              :stroke-width="edge.lineWidth"
+              :stroke-opacity="edge.opacity"
+              :stroke-dasharray="edge.strokeDasharray"
+              stroke-linecap="round"
+              :marker-end="`url(#${edge.markerId})`"
+            />
+          </g>
+        </svg>
 
-      <div
-        v-for="node in nodeViews"
-        :key="node.id"
-        class="fresky-node"
-        :class="[
-          `fresky-node--${node.kind}`,
-          { 'fresky-node--selected': props.selectedNodeId === node.id, 'fresky-node--surplus': node.isSurplus },
-        ]"
-        :style="{
-          left: `${node.x}px`,
-          top: `${node.y}px`,
-          width: `${node.width}px`,
-          height: `${node.height}px`,
-          '--fresky-accent': node.accent,
-        }"
-        @click.stop="emit('update:selected-node-id', node.id)"
-      >
-        <template v-if="node.kind === 'machine'">
-          <div class="fresky-node__machine-title">{{ node.title }}</div>
-          <div class="fresky-node__machine-sub">{{ node.subtitle }}</div>
-        </template>
+        <div
+          v-for="edge in edgeViews"
+          :key="`${edge.id}:label`"
+          class="fresky-flow__edge-label"
+          :style="{ left: `${edge.labelX}px`, top: `${edge.labelY}px` }"
+        >
+          {{ edge.label }}
+        </div>
 
-        <template v-else>
-          <div
-            class="fresky-node__icon-wrap"
-            @click.stop="onNodeIconClick(node)"
-            @mouseenter="onNodeHoverEnter(node)"
-            @mouseleave="emit('item-leave')"
-          >
-            <img v-if="node.iconUrl" class="fresky-node__icon" :src="node.iconUrl" :alt="node.title" />
-            <div v-else class="fresky-node__icon-fallback">{{ node.shortName }}</div>
-          </div>
-          <div class="fresky-node__title">{{ node.title }}</div>
-          <div class="fresky-node__sub">{{ node.subtitle }}</div>
-        </template>
+        <div
+          v-for="node in nodeViews"
+          :key="node.id"
+          class="fresky-node"
+          :class="[
+            `fresky-node--${node.kind}`,
+            { 'fresky-node--selected': props.selectedNodeId === node.id, 'fresky-node--surplus': node.isSurplus },
+          ]"
+          :style="{
+            left: `${node.x}px`,
+            top: `${node.y}px`,
+            width: `${node.width}px`,
+            height: `${node.height}px`,
+            '--fresky-accent': node.accent,
+          }"
+          @click.stop="emit('update:selected-node-id', node.id)"
+        >
+          <template v-if="node.kind === 'machine'">
+            <div class="fresky-node__machine-inner">
+              <div class="fresky-node__machine-icon-wrap">
+                <img v-if="node.iconUrl" class="fresky-node__machine-icon" :src="node.iconUrl" :alt="node.title" />
+                <div v-else class="fresky-node__machine-icon-fallback">M</div>
+              </div>
+              <div class="fresky-node__machine-meta">
+                <div class="fresky-node__machine-title">{{ node.title }}</div>
+                <div class="fresky-node__machine-sub">{{ node.subtitle }}</div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else>
+            <div
+              class="fresky-node__icon-wrap"
+              @click.stop="onNodeIconClick(node)"
+              @mouseenter="onNodeHoverEnter(node)"
+              @mouseleave="emit('item-leave')"
+            >
+              <img v-if="node.iconUrl" class="fresky-node__icon" :src="node.iconUrl" :alt="node.title" />
+              <div v-else class="fresky-node__icon-fallback">{{ node.shortName }}</div>
+            </div>
+            <div class="fresky-node__title">{{ node.title }}</div>
+            <div class="fresky-node__sub">{{ node.subtitle }}</div>
+          </template>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 
 type ItemKeyLike = {
   id: string;
@@ -118,8 +142,8 @@ type FlowEdge = {
   id: string;
   source: string;
   target: string;
-  label?: string;
-  style?: Record<string, unknown>;
+  label?: unknown;
+  style?: unknown;
 };
 
 type NodeView = {
@@ -133,9 +157,22 @@ type NodeView = {
   height: number;
   iconUrl: string;
   shortName: string;
-  itemKey?: ItemKeyLike;
+  itemKey: ItemKeyLike | null;
   accent: string;
   isSurplus: boolean;
+};
+
+type EdgeView = {
+  id: string;
+  markerId: string;
+  path: string;
+  lineWidth: number;
+  stroke: string;
+  opacity: number;
+  strokeDasharray: string;
+  label: string;
+  labelX: number;
+  labelY: number;
 };
 
 const props = defineProps<{
@@ -158,9 +195,9 @@ function finiteOr(v: unknown, fallback: number): number {
 }
 
 function nodeSize(type: string | undefined): { width: number; height: number } {
-  if (type === 'lineMachineNode') return { width: 210, height: 86 };
-  if (type === 'lineFluidNode') return { width: 120, height: 108 };
-  return { width: 112, height: 126 };
+  if (type === 'lineMachineNode') return { width: 188, height: 84 };
+  if (type === 'lineFluidNode') return { width: 96, height: 116 };
+  return { width: 96, height: 116 };
 }
 
 function parseDash(value: unknown): string {
@@ -193,6 +230,25 @@ function itemIcon(itemId: string | undefined): string {
   return '';
 }
 
+function styleObject(value: unknown): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function initialChar(text: string, fallback: string): string {
+  const t = text.trim();
+  if (t.length > 0) return t.slice(0, 1).toUpperCase();
+  const f = fallback.trim();
+  if (f.length > 0) return f.slice(0, 1).toUpperCase();
+  return '?';
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 function cubicPointAt(
   t: number,
   p0: { x: number; y: number },
@@ -210,7 +266,7 @@ function cubicPointAt(
 
 const rawNodeViews = computed(() => {
   return props.nodes.map((node) => {
-    const data = (node.data ?? {}) as Record<string, unknown>;
+    const data = node.data ?? {};
     const kind = node.type === 'lineMachineNode' ? 'machine' : node.type === 'lineFluidNode' ? 'fluid' : 'item';
     const { width, height } = nodeSize(node.type);
     const itemKeyCandidate = data.itemKey as ItemKeyLike | undefined;
@@ -228,8 +284,8 @@ const rawNodeViews = computed(() => {
       width,
       height,
       iconUrl: kind === 'machine' ? '' : itemIcon(itemId),
-      shortName: (typeof data.title === 'string' && data.title.trim().length > 0 ? data.title.trim()[0] : node.id[0] || '?').toUpperCase(),
-      itemKey,
+      shortName: initialChar(typeof data.title === 'string' ? data.title : '', node.id),
+      itemKey: itemKey ?? null,
       accent: kind === 'machine' ? '#6b7280' : itemAccentColor(itemId),
       isSurplus: !!data.isSurplus,
     } satisfies NodeView;
@@ -270,7 +326,7 @@ const nodeViews = computed(() =>
 
 const nodeViewById = computed(() => new Map(nodeViews.value.map((node) => [node.id, node] as const)));
 
-const edgeViews = computed(() => {
+const edgeViews = computed<EdgeView[]>(() => {
   return props.edges
     .map((edge, index) => {
       const source = nodeViewById.value.get(edge.source);
@@ -288,7 +344,7 @@ const edgeViews = computed(() => {
       const path = `M ${startX} ${startY} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${endX} ${endY}`;
       const mid = cubicPointAt(0.5, { x: startX, y: startY }, cp1, cp2, { x: endX, y: endY });
 
-      const style = edge.style ?? {};
+      const style = styleObject(edge.style);
       const lineWidth = Math.max(1, finiteOr(style.strokeWidth, 2));
       const stroke = typeof style.stroke === 'string' && style.stroke.trim() ? style.stroke : '#636f7f';
       const opacity = Math.max(0.1, Math.min(1, finiteOr(style.opacity, 0.95)));
@@ -304,10 +360,113 @@ const edgeViews = computed(() => {
         label: typeof edge.label === 'string' ? edge.label : '',
         labelX: mid.x,
         labelY: mid.y,
-      };
+      } satisfies EdgeView;
     })
     .filter((v): v is NonNullable<typeof v> => v !== null);
 });
+
+const viewportEl = ref<HTMLElement | null>(null);
+const zoom = ref(1);
+const panX = ref(24);
+const panY = ref(24);
+const isPanning = ref(false);
+const hasInteracted = ref(false);
+
+const stageStyle = computed(() => ({
+  transform: `translate(${panX.value}px, ${panY.value}px) scale(${zoom.value})`,
+}));
+
+let panPointerId: number | null = null;
+let panStartClientX = 0;
+let panStartClientY = 0;
+let panStartX = 0;
+let panStartY = 0;
+
+function fitView() {
+  const viewport = viewportEl.value;
+  if (!viewport) return;
+  const vw = Math.max(1, viewport.clientWidth);
+  const vh = Math.max(1, viewport.clientHeight);
+  const scaleX = (vw - 40) / boardWidth.value;
+  const scaleY = (vh - 40) / boardHeight.value;
+  zoom.value = clamp(Math.min(scaleX, scaleY, 1), 0.35, 2.8);
+  panX.value = (vw - boardWidth.value * zoom.value) * 0.5;
+  panY.value = (vh - boardHeight.value * zoom.value) * 0.5;
+}
+
+function resetView() {
+  hasInteracted.value = false;
+  fitView();
+}
+
+function zoomBy(factor: number, clientX?: number, clientY?: number) {
+  const viewport = viewportEl.value;
+  if (!viewport) return;
+  const rect = viewport.getBoundingClientRect();
+  const cx = clientX ?? (rect.left + rect.width / 2);
+  const cy = clientY ?? (rect.top + rect.height / 2);
+  const vx = cx - rect.left;
+  const vy = cy - rect.top;
+  const worldX = (vx - panX.value) / zoom.value;
+  const worldY = (vy - panY.value) / zoom.value;
+  const nextZoom = clamp(zoom.value * factor, 0.35, 2.8);
+  panX.value = vx - worldX * nextZoom;
+  panY.value = vy - worldY * nextZoom;
+  zoom.value = nextZoom;
+}
+
+function zoomIn() {
+  hasInteracted.value = true;
+  zoomBy(1.12);
+}
+
+function zoomOut() {
+  hasInteracted.value = true;
+  zoomBy(1 / 1.12);
+}
+
+function onWheel(evt: WheelEvent) {
+  hasInteracted.value = true;
+  const factor = evt.deltaY < 0 ? 1.08 : 1 / 1.08;
+  zoomBy(factor, evt.clientX, evt.clientY);
+}
+
+function onPointerDown(evt: PointerEvent) {
+  if (evt.button !== 0) return;
+  const target = evt.target as HTMLElement | null;
+  if (target?.closest('.fresky-node')) return;
+  hasInteracted.value = true;
+  isPanning.value = true;
+  panPointerId = evt.pointerId;
+  panStartClientX = evt.clientX;
+  panStartClientY = evt.clientY;
+  panStartX = panX.value;
+  panStartY = panY.value;
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
+}
+
+function onPointerMove(evt: PointerEvent) {
+  if (!isPanning.value || panPointerId === null || evt.pointerId !== panPointerId) return;
+  panX.value = panStartX + (evt.clientX - panStartClientX);
+  panY.value = panStartY + (evt.clientY - panStartClientY);
+}
+
+function onPointerUp(evt: PointerEvent) {
+  if (panPointerId !== null && evt.pointerId !== panPointerId) return;
+  isPanning.value = false;
+  panPointerId = null;
+  window.removeEventListener('pointermove', onPointerMove);
+  window.removeEventListener('pointerup', onPointerUp);
+  window.removeEventListener('pointercancel', onPointerUp);
+}
+
+function onBackgroundClick(evt: MouseEvent) {
+  const target = evt.target as HTMLElement | null;
+  if (target?.closest('.fresky-node') || target?.closest('.fresky-flow__toolbar')) return;
+  emit('update:selected-node-id', null);
+}
 
 function onNodeIconClick(node: NodeView) {
   if (!node.itemKey) return;
@@ -318,15 +477,77 @@ function onNodeHoverEnter(node: NodeView) {
   if (!node.itemKey) return;
   emit('item-hover', node.itemKey);
 }
+
+watch([boardWidth, boardHeight], async () => {
+  if (hasInteracted.value) return;
+  await nextTick();
+  fitView();
+}, { immediate: true });
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pointermove', onPointerMove);
+  window.removeEventListener('pointerup', onPointerUp);
+  window.removeEventListener('pointercancel', onPointerUp);
+});
 </script>
 
 <style scoped>
 .fresky-flow {
+  position: relative;
   width: 100%;
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(229, 231, 235, 0.5) 0%, rgba(226, 232, 240, 0.32) 100%);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: #d6d6d6;
+  cursor: grab;
+}
+
+.fresky-flow--panning {
+  cursor: grabbing;
+}
+
+.fresky-flow__toolbar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(100, 116, 139, 0.3);
+}
+
+.fresky-flow__tool-btn {
+  border: 1px solid rgba(100, 116, 139, 0.45);
+  background: #fff;
+  color: #111827;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.fresky-flow__tool-btn--reset {
+  width: 36px;
+  font-size: 11px;
+}
+
+.fresky-flow__zoom-text {
+  min-width: 38px;
+  text-align: right;
+  font-size: 12px;
+  color: #334155;
+}
+
+.fresky-flow__stage {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  will-change: transform;
 }
 
 .fresky-flow__board {
@@ -344,16 +565,15 @@ function onNodeHoverEnter(node: NodeView) {
 .fresky-flow__edge-label {
   position: absolute;
   transform: translate(-50%, -50%);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.3;
   white-space: nowrap;
-  color: #1f2937;
-  padding: 2px 6px;
+  color: #111827;
+  padding: 1px 4px;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(1px);
+  background: rgba(255, 255, 255, 0.55);
   pointer-events: none;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.09);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
 }
 
 .fresky-node {
@@ -367,92 +587,135 @@ function onNodeHoverEnter(node: NodeView) {
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
+  gap: 5px;
 }
 
 .fresky-node--machine {
-  border-radius: 10px;
-  border: 2px solid rgba(75, 85, 99, 0.45);
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 4px 16px rgba(2, 6, 23, 0.08);
-  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(100, 116, 139, 0.35);
+  background: rgba(235, 235, 235, 0.92);
+  box-shadow: 0 2px 8px rgba(2, 6, 23, 0.1);
+  padding: 7px 8px;
+}
+
+.fresky-node__machine-inner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.fresky-node__machine-icon-wrap {
+  width: 42px;
+  height: 42px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(100, 116, 139, 0.25);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.fresky-node__machine-icon {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.fresky-node__machine-icon-fallback {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  background: rgba(148, 163, 184, 0.25);
+  color: #334155;
+  font-weight: 700;
+}
+
+.fresky-node__machine-meta {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .fresky-node__icon-wrap {
-  width: 68px;
-  height: 68px;
-  border-radius: 10px;
-  border: 2px solid color-mix(in srgb, var(--fresky-accent), #374151 35%);
-  background: rgba(255, 255, 255, 0.7);
-  box-shadow: 0 4px 14px rgba(2, 6, 23, 0.14);
+  width: 66px;
+  height: 66px;
+  border-radius: 8px;
+  border: 1px solid rgba(100, 116, 139, 0.2);
+  background: #dfdfdf;
+  box-shadow: 0 2px 7px rgba(2, 6, 23, 0.14);
   display: grid;
   place-items: center;
   cursor: pointer;
 }
 
 .fresky-node__icon {
-  width: 52px;
-  height: 52px;
+  width: 50px;
+  height: 50px;
   object-fit: contain;
 }
 
 .fresky-node__icon-fallback {
-  width: 52px;
-  height: 52px;
-  border-radius: 8px;
+  width: 50px;
+  height: 50px;
+  border-radius: 6px;
   display: grid;
   place-items: center;
   font-weight: 700;
-  color: #334155;
+  color: #1f2937;
   background: rgba(148, 163, 184, 0.2);
 }
 
 .fresky-node__title {
-  max-width: 128px;
-  font-size: 18px;
-  line-height: 1.1;
+  max-width: 112px;
+  font-size: 13px;
+  line-height: 1.15;
   text-align: center;
-  color: #0f172a;
+  color: #111827;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .fresky-node__sub {
-  max-width: 170px;
+  max-width: 112px;
   font-size: 12px;
   line-height: 1.2;
   text-align: center;
-  color: #334155;
+  color: #374151;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .fresky-node__machine-title {
-  font-size: 34px;
-  line-height: 1;
-  color: #0f172a;
-  text-align: center;
+  font-size: 13px;
+  line-height: 1.15;
+  color: #111827;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .fresky-node__machine-sub {
-  margin-top: 4px;
-  font-size: 14px;
-  color: #334155;
-  text-align: center;
+  margin-top: 3px;
+  font-size: 11px;
+  color: #374151;
+  text-align: left;
+  line-height: 1.2;
+  max-height: 2.4em;
+  overflow: hidden;
 }
 
 .fresky-node--selected.fresky-node--machine {
-  border-color: var(--q-primary, #1976d2);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--q-primary, #1976d2), transparent 72%);
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5);
 }
 
 .fresky-node--selected .fresky-node__icon-wrap {
-  border-color: var(--q-primary, #1976d2);
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.45), 0 2px 7px rgba(2, 6, 23, 0.14);
 }
 
 .fresky-node--surplus .fresky-node__icon-wrap {
@@ -460,12 +723,28 @@ function onNodeHoverEnter(node: NodeView) {
 }
 
 .body--dark .fresky-flow {
-  background: linear-gradient(180deg, rgba(30, 41, 59, 0.75) 0%, rgba(15, 23, 42, 0.75) 100%);
+  border-color: rgba(148, 163, 184, 0.4);
+  background: #30343a;
+}
+
+.body--dark .fresky-flow__toolbar {
+  background: rgba(15, 23, 42, 0.74);
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+.body--dark .fresky-flow__tool-btn {
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
+  border-color: rgba(148, 163, 184, 0.55);
+}
+
+.body--dark .fresky-flow__zoom-text {
+  color: #e2e8f0;
 }
 
 .body--dark .fresky-flow__edge-label {
   color: #e2e8f0;
-  background: rgba(15, 23, 42, 0.76);
+  background: rgba(15, 23, 42, 0.6);
 }
 
 .body--dark .fresky-node__title {
@@ -479,15 +758,17 @@ function onNodeHoverEnter(node: NodeView) {
 
 .body--dark .fresky-node--machine {
   border-color: rgba(148, 163, 184, 0.65);
-  background: rgba(15, 23, 42, 0.72);
-}
-
-.body--dark .fresky-node__machine-title {
-  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.62);
 }
 
 .body--dark .fresky-node__icon-wrap {
-  background: rgba(15, 23, 42, 0.82);
+  background: rgba(15, 23, 42, 0.85);
+  border-color: rgba(148, 163, 184, 0.4);
+}
+
+.body--dark .fresky-node__machine-icon-wrap {
+  background: rgba(15, 23, 42, 0.86);
+  border-color: rgba(148, 163, 184, 0.4);
 }
 
 .body--dark .fresky-node__icon-fallback {
