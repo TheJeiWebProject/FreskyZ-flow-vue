@@ -1,0 +1,14 @@
+{
+  "name": "@thejeiweb/freskyz-flow-vue",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./line-flow": "./src/FreskyLineFlowView.vue"
+  },
+  "peerDependencies": {
+    "vue": "^3.5.0"
+  }
+}
