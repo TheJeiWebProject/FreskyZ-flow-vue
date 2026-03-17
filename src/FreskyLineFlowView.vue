@@ -10,7 +10,9 @@
     <div class="fresky-flow__toolbar">
       <button class="fresky-flow__tool-btn" @click.stop="zoomOut">-</button>
       <button class="fresky-flow__tool-btn" @click.stop="zoomIn">+</button>
-      <button class="fresky-flow__tool-btn fresky-flow__tool-btn--reset" @click.stop="resetView">1:1</button>
+      <button class="fresky-flow__tool-btn fresky-flow__tool-btn--reset" @click.stop="resetView">
+        1:1
+      </button>
       <span class="fresky-flow__zoom-text">{{ Math.round(zoom * 100) }}%</span>
     </div>
 
@@ -19,7 +21,26 @@
         class="fresky-flow__board"
         :style="{ width: `${boardWidth}px`, height: `${boardHeight}px` }"
       >
-        <svg class="fresky-flow__edges" :viewBox="`0 0 ${boardWidth} ${boardHeight}`" preserveAspectRatio="none">
+        <svg
+          class="fresky-flow__edges"
+          :viewBox="`0 0 ${boardWidth} ${boardHeight}`"
+          preserveAspectRatio="none"
+        >
+          <defs>
+            <marker
+              v-for="edge in edgeViews"
+              :id="markerId(edge.id)"
+              :key="`mk_${edge.id}`"
+              markerWidth="8"
+              markerHeight="8"
+              refX="7"
+              refY="4"
+              orient="auto"
+              markerUnits="userSpaceOnUse"
+            >
+              <path d="M 0 0 L 8 4 L 0 8 z" :fill="edge.stroke" :fill-opacity="edge.opacity" />
+            </marker>
+          </defs>
           <g v-for="edge in edgeViews" :key="edge.id">
             <path
               :d="edge.path"
@@ -30,17 +51,22 @@
               :stroke-dasharray="edge.strokeDasharray"
               stroke-linecap="round"
               stroke-linejoin="round"
+              :marker-end="`url(#${markerId(edge.id)})`"
             />
           </g>
         </svg>
 
         <div
           v-for="node in nodeViews"
-          :key="node.id"
+          :key="node.uid"
           class="fresky-node"
           :class="[
             `fresky-node--${node.kind}`,
-            { 'fresky-node--selected': props.selectedNodeId === node.id, 'fresky-node--surplus': node.isSurplus },
+            {
+              'fresky-node--selected': props.selectedNodeId === node.id,
+              'fresky-node--surplus': node.isSurplus,
+              'fresky-node--duplicate': node.duplicate,
+            },
           ]"
           :style="{
             left: `${node.x}px`,
@@ -52,27 +78,10 @@
           @click.stop="emit('update:selected-node-id', node.id)"
         >
           <template v-if="node.kind === 'machine'">
-            <div class="fresky-node__machine-inner">
-              <div class="fresky-node__machine-icon-wrap">
-                <img
-                  v-if="node.icon.kind === 'image'"
-                  class="fresky-node__machine-icon"
-                  :src="node.icon.src"
-                  :alt="node.title"
-                />
-                <div
-                  v-else-if="node.icon.kind === 'sprite'"
-                  class="fresky-node__sprite-wrap fresky-node__sprite-wrap--small"
-                  :style="spriteWrapStyle(node.icon)"
-                >
-                  <div class="fresky-node__sprite-image" :style="spriteImageStyle(node.icon, 32)" />
-                </div>
-                <div v-else class="fresky-node__machine-icon-fallback">M</div>
-              </div>
-              <div class="fresky-node__machine-meta">
-                <div class="fresky-node__machine-title">{{ node.title }}</div>
-                <div class="fresky-node__machine-sub">{{ node.subtitle }}</div>
-              </div>
+            <div class="fresky-node__machine-sub">{{ node.subtitle }}</div>
+            <div class="fresky-node__machine-title">{{ node.title }}</div>
+            <div v-if="node.machineCountText" class="fresky-node__machine-count">
+              ×{{ node.machineCountText }}
             </div>
           </template>
 
@@ -83,23 +92,27 @@
               @mouseenter="onNodeHoverEnter(node)"
               @mouseleave="emit('item-leave')"
             >
-              <img
-                v-if="node.icon.kind === 'image'"
-                class="fresky-node__icon"
-                :src="node.icon.src"
-                :alt="node.title"
-              />
-              <div
-                v-else-if="node.icon.kind === 'sprite'"
-                class="fresky-node__sprite-wrap"
-                :style="spriteWrapStyle(node.icon)"
-              >
-                <div class="fresky-node__sprite-image" :style="spriteImageStyle(node.icon, 50)" />
-              </div>
-              <div v-else class="fresky-node__icon-fallback">{{ node.shortName }}</div>
+              <template v-if="node.duplicate">
+                <div class="fresky-node__duplicate-dot">...</div>
+              </template>
+              <template v-else>
+                <img
+                  v-if="node.icon.kind === 'image'"
+                  class="fresky-node__icon"
+                  :src="node.icon.src"
+                  :alt="node.title"
+                />
+                <div
+                  v-else-if="node.icon.kind === 'sprite'"
+                  class="fresky-node__sprite-wrap"
+                  :style="spriteWrapStyle(node.icon)"
+                >
+                  <div class="fresky-node__sprite-image" :style="spriteImageStyle(node.icon, 48)" />
+                </div>
+                <div v-else class="fresky-node__icon-fallback">{{ node.shortName }}</div>
+              </template>
             </div>
-            <div class="fresky-node__title">{{ node.title }}</div>
-            <div class="fresky-node__sub">{{ node.subtitle }}</div>
+            <div class="fresky-node__title">{{ node.duplicate ? '...' : node.title }}</div>
           </template>
         </div>
       </div>
@@ -152,10 +165,12 @@ type IconVisual =
   | { kind: 'image'; src: string }
   | { kind: 'sprite'; url: string; position: string; size: number; color: string | null };
 
+type NodeKind = 'item' | 'machine' | 'fluid';
+
 type NodeView = {
   uid: string;
   id: string;
-  kind: 'item' | 'machine' | 'fluid';
+  kind: NodeKind;
   title: string;
   subtitle: string;
   x: number;
@@ -169,6 +184,7 @@ type NodeView = {
   isSurplus: boolean;
   isRoot: boolean;
   duplicate: boolean;
+  machineCountText?: string;
 };
 
 type EdgeView = {
@@ -185,12 +201,13 @@ type EdgeView = {
 type TreeNode = {
   uid: string;
   id: string;
+  kind: NodeKind;
   depth: number;
   position: number;
   duplicate: boolean;
   children: TreeNode[];
   thread: TreeNode | null;
-  threadOffset: number | null;
+  threadOffset: number | undefined;
 };
 
 const props = defineProps<{
@@ -213,9 +230,9 @@ function finiteOr(v: unknown, fallback: number): number {
 }
 
 function nodeSize(type: string | undefined): { width: number; height: number } {
-  if (type === 'lineMachineNode') return { width: 188, height: 84 };
-  if (type === 'lineFluidNode') return { width: 96, height: 116 };
-  return { width: 96, height: 116 };
+  if (type === 'lineMachineNode') return { width: 96, height: 48 };
+  if (type === 'lineFluidNode') return { width: 72, height: 72 };
+  return { width: 72, height: 72 };
 }
 
 function parseDash(value: unknown): string {
@@ -242,7 +259,10 @@ function sameItemKey(a: ItemKeyLike | null, b: ItemKeyLike | null): boolean {
   return a.id === b.id && a.meta === b.meta && stableText(a.nbt) === stableText(b.nbt);
 }
 
-function pickItemDef(itemKey: ItemKeyLike | null, machineItemId: string | null): ItemDefLike | undefined {
+function pickItemDef(
+  itemKey: ItemKeyLike | null,
+  machineItemId: string | null,
+): ItemDefLike | undefined {
   const defs = Object.values(props.itemDefsByKeyHash);
   if (itemKey) {
     const exact = defs.find((d) => sameItemKey(itemKey, d.key ?? null));
@@ -297,10 +317,21 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function machineCountText(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const t = value.trim();
+    if (t) return t;
+  }
+  const n = finiteOr(value, 0);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  const rounded = Math.round(n * 1000) / 1000;
+  return `${rounded}`.replace(/\.?0+$/, '');
+}
+
 function layoutTree(root: TreeNode) {
   const MinDistance = 1;
   const setup = (thisNode: TreeNode) => {
-    thisNode.children.filter((c) => c.children.length > 0).forEach(setup);
+    thisNode.children.filter((c) => c.children.length).forEach(setup);
     if (thisNode.children.length === 1) {
       thisNode.children[0]!.position = 0;
       return;
@@ -313,86 +344,161 @@ function layoutTree(root: TreeNode) {
       thisNode.children[idx]!.position = idx === 0 ? 0 : MinDistance;
     });
 
-    let activeIndexes = childIndexes.slice();
-    const leftCursors: Array<TreeNode | null> = thisNode.children.slice();
-    const leftOffsets = thisNode.children.map(() => 0);
-    const rightCursors: Array<TreeNode | null> = thisNode.children.slice();
-    const rightOffsets = thisNode.children.map(() => 0);
+    let activeIndexes = childIndexes.map((i) => i);
+    const leftCursors: Array<TreeNode | null> = thisNode.children.map((n) => n);
+    const leftCursorOffsets = thisNode.children.map(() => 0);
+    const rightCursors: Array<TreeNode | null> = thisNode.children.map((n) => n);
+    const rightCursorOffsets = thisNode.children.map(() => 0);
 
-    let leftmost = 0;
-    const rightmost = childIndexes.map((idx) =>
+    let leftmostDescendantPosition = 0;
+    const rightmostNodes = childIndexes.map((idx) =>
       idx === childCount - 1
-        ? { node: thisNode.children[idx] ?? null, offset: 0 }
-        : { node: null, offset: Number.NEGATIVE_INFINITY },
+        ? { node: thisNode.children[idx]!, offset: 0 }
+        : { node: null as TreeNode | null, offset: undefined as number | undefined },
     );
 
-    while (activeIndexes.length > 0) {
-      for (const idx of activeIndexes) {
-        const l = leftCursors[idx];
-        if (l?.thread) {
-          leftOffsets[idx] = (leftOffsets[idx] ?? 0) + (l.threadOffset ?? 0);
-          leftCursors[idx] = l.thread;
-        } else if (l && l.children.length > 0) {
-          const child = l.children[0] ?? null;
-          leftCursors[idx] = child;
-          leftOffsets[idx] = (leftOffsets[idx] ?? 0) + (child?.position ?? 0);
-        } else if (idx !== activeIndexes[0] || activeIndexes.length === 1) {
-          leftCursors[idx] = null;
+    while (activeIndexes.length) {
+      for (const childIndex of activeIndexes) {
+        if (leftCursors[childIndex]!.thread) {
+          leftCursorOffsets[childIndex]! += leftCursors[childIndex]!.threadOffset ?? 0;
+          leftCursors[childIndex] = leftCursors[childIndex]!.thread;
+        } else if (leftCursors[childIndex]!.children.length) {
+          leftCursors[childIndex] = leftCursors[childIndex]!.children[0]!;
+          leftCursorOffsets[childIndex]! += leftCursors[childIndex].position;
+        } else if (childIndex !== activeIndexes[0] || activeIndexes.length === 1) {
+          leftCursors[childIndex] = null;
         }
 
-        const r = rightCursors[idx];
-        if (r?.thread) {
-          rightOffsets[idx] = (rightOffsets[idx] ?? 0) + (r.threadOffset ?? 0);
-          rightCursors[idx] = r.thread;
-        } else if (r && r.children.length > 0) {
-          const child = r.children[r.children.length - 1] ?? null;
-          rightCursors[idx] = child;
-          rightOffsets[idx] = (rightOffsets[idx] ?? 0) + (child?.position ?? 0);
-        } else if (idx !== activeIndexes[activeIndexes.length - 1] || activeIndexes.length === 1) {
-          rightCursors[idx] = null;
+        if (rightCursors[childIndex]!.thread) {
+          rightCursorOffsets[childIndex]! += rightCursors[childIndex]!.threadOffset ?? 0;
+          rightCursors[childIndex] = rightCursors[childIndex]!.thread;
+        } else if (rightCursors[childIndex]!.children.length) {
+          rightCursors[childIndex] =
+            rightCursors[childIndex]!.children[rightCursors[childIndex]!.children.length - 1]!;
+          rightCursorOffsets[childIndex]! += rightCursors[childIndex].position;
+        } else if (
+          childIndex !== activeIndexes[activeIndexes.length - 1] ||
+          activeIndexes.length === 1
+        ) {
+          rightCursors[childIndex] = null;
         }
       }
 
-      const nextActive = activeIndexes.filter((idx, i) => (i === 0 ? !!rightCursors[idx] : !!leftCursors[idx]));
-      if (nextActive.length > 1) {
-        for (let i = 0; i < nextActive.length - 1; i += 1) {
-          const li = nextActive[i]!;
-          const ri = nextActive[i + 1]!;
-          let dist = 0;
-          for (let c = li + 1; c <= ri; c += 1) dist += thisNode.children[c]!.position;
-          if (dist + leftOffsets[ri]! - rightOffsets[li]! < MinDistance) {
-            const inc = MinDistance - leftOffsets[ri]! + rightOffsets[li]! - dist;
-            if (li + 1 === ri) thisNode.children[ri]!.position += inc;
-            else {
-              for (let c = li + 1; c <= ri; c += 1) thisNode.children[c]!.position += inc / (ri - li);
+      const newActiveIndexes = activeIndexes.filter((childIndex, i) =>
+        i === 0 ? !!rightCursors[childIndex] : !!leftCursors[childIndex],
+      );
+
+      if (newActiveIndexes.length > 1) {
+        for (let i = 0; i < newActiveIndexes.length - 1; i += 1) {
+          const leftIndex = newActiveIndexes[i]!;
+          const rightIndex = newActiveIndexes[i + 1]!;
+          let subtreeDistance = 0;
+          for (let childIndex = leftIndex + 1; childIndex <= rightIndex; childIndex += 1) {
+            subtreeDistance += thisNode.children[childIndex]!.position;
+          }
+          if (
+            subtreeDistance + leftCursorOffsets[rightIndex]! - rightCursorOffsets[leftIndex]! <
+            MinDistance
+          ) {
+            const increaseDistance =
+              MinDistance -
+              leftCursorOffsets[rightIndex]! +
+              rightCursorOffsets[leftIndex]! -
+              subtreeDistance;
+            if (leftIndex + 1 === rightIndex) {
+              thisNode.children[rightIndex]!.position += increaseDistance;
+            } else {
+              for (let childIndex = leftIndex + 1; childIndex <= rightIndex; childIndex += 1) {
+                thisNode.children[childIndex]!.position +=
+                  increaseDistance / (rightIndex - leftIndex);
+              }
             }
           }
         }
       }
 
-      activeIndexes = nextActive;
-      if (activeIndexes.length > 0) {
-        const lIdx = activeIndexes[0]!;
-        leftmost = Math.min(leftmost, leftOffsets[lIdx]!);
-        const rIdx = activeIndexes[activeIndexes.length - 1]!;
-        if (!rightmost[rIdx]!.node || rightmost[rIdx]!.offset < rightOffsets[rIdx]!) {
-          rightmost[rIdx]!.node = rightCursors[rIdx] ?? null;
-          rightmost[rIdx]!.offset = rightOffsets[rIdx]!;
+      let leftmostChildIndex = activeIndexes[0]!;
+      if (activeIndexes.length > 1 && !rightCursors[leftmostChildIndex]) {
+        let subtreeDistance = 0;
+        let nextLeftmostChildIndexIndex = 1;
+        while (
+          nextLeftmostChildIndexIndex < activeIndexes.length &&
+          !leftCursors[activeIndexes[nextLeftmostChildIndexIndex]!]
+        ) {
+          subtreeDistance +=
+            thisNode.children[activeIndexes[nextLeftmostChildIndexIndex]!]!.position;
+          nextLeftmostChildIndexIndex += 1;
+        }
+        if (nextLeftmostChildIndexIndex < activeIndexes.length) {
+          const nextLeftmostChildIndex = activeIndexes[nextLeftmostChildIndexIndex]!;
+          subtreeDistance += thisNode.children[nextLeftmostChildIndex]!.position;
+          leftCursors[leftmostChildIndex]!.thread = leftCursors[nextLeftmostChildIndex] ?? null;
+          leftCursors[leftmostChildIndex]!.threadOffset =
+            leftCursorOffsets[nextLeftmostChildIndex]! -
+            leftCursorOffsets[leftmostChildIndex]! +
+            subtreeDistance;
+          leftmostChildIndex = nextLeftmostChildIndex;
+        }
+      }
+
+      let rightmostChildIndex = activeIndexes[activeIndexes.length - 1]!;
+      if (activeIndexes.length > 1 && !leftCursors[rightmostChildIndex]) {
+        let subtreeDistance = thisNode.children[rightmostChildIndex]!.position;
+        let nextRightmostChildIndexIndex = activeIndexes.length - 2;
+        while (
+          nextRightmostChildIndexIndex >= 0 &&
+          !rightCursors[activeIndexes[nextRightmostChildIndexIndex]!]
+        ) {
+          subtreeDistance +=
+            thisNode.children[activeIndexes[nextRightmostChildIndexIndex]!]!.position;
+          nextRightmostChildIndexIndex -= 1;
+        }
+        if (nextRightmostChildIndexIndex >= 0) {
+          const nextRightmostChildIndex = activeIndexes[nextRightmostChildIndexIndex]!;
+          rightCursors[rightmostChildIndex]!.thread = rightCursors[nextRightmostChildIndex] ?? null;
+          rightCursors[rightmostChildIndex]!.threadOffset =
+            rightCursorOffsets[nextRightmostChildIndex]! -
+            rightCursorOffsets[rightmostChildIndex]! -
+            subtreeDistance;
+          rightmostChildIndex = nextRightmostChildIndex;
+        }
+      }
+
+      activeIndexes = newActiveIndexes;
+      if (activeIndexes.length) {
+        leftmostDescendantPosition = Math.min(
+          leftmostDescendantPosition,
+          leftCursorOffsets[leftmostChildIndex]!,
+        );
+        if (
+          !rightmostNodes[rightmostChildIndex]!.node ||
+          (rightmostNodes[rightmostChildIndex]!.offset ?? Number.NEGATIVE_INFINITY) <
+            rightCursorOffsets[rightmostChildIndex]!
+        ) {
+          rightmostNodes[rightmostChildIndex]!.node = rightCursors[rightmostChildIndex] ?? null;
+          rightmostNodes[rightmostChildIndex]!.offset = rightCursorOffsets[rightmostChildIndex]!;
         }
       }
     }
 
-    let dist = 0;
-    let rightMostPos = 0;
-    for (const idx of childIndexes) {
-      if (idx !== 0) dist += thisNode.children[idx]!.position;
-      if (rightmost[idx]!.node) rightMostPos = Math.max(rightMostPos, dist + rightmost[idx]!.offset);
+    let subtreeDistance = 0;
+    let rightmostDescendantPosition = 0;
+    for (const childIndex of childIndexes) {
+      if (childIndex !== 0) {
+        subtreeDistance += thisNode.children[childIndex]!.position;
+      }
+      if (rightmostNodes[childIndex]!.node) {
+        rightmostDescendantPosition = Math.max(
+          rightmostDescendantPosition,
+          subtreeDistance + (rightmostNodes[childIndex]!.offset ?? 0),
+        );
+      }
     }
 
-    let cur = -(leftmost + rightMostPos) / 2;
-    thisNode.children.forEach((child) => {
-      cur = child.position += cur;
-    });
+    let currentPosition = -(leftmostDescendantPosition + rightmostDescendantPosition) / 2;
+    for (const child of thisNode.children) {
+      currentPosition = child.position += currentPosition;
+    }
   };
 
   setup(root);
@@ -415,7 +521,7 @@ function layoutTree(root: TreeNode) {
   const setPosition = (node: TreeNode, position: number) => {
     node.position = position;
     node.thread = null;
-    node.threadOffset = null;
+    node.threadOffset = undefined;
     node.children.forEach((child) => setPosition(child, position + child.position));
   };
   setPosition(root, -minCursorPos);
@@ -425,11 +531,17 @@ const baseNodeById = computed(() => {
   const map = new Map<string, Omit<NodeView, 'uid' | 'x' | 'y' | 'shortName' | 'duplicate'>>();
   props.nodes.forEach((node) => {
     const data = node.data ?? {};
-    const kind = node.type === 'lineMachineNode' ? 'machine' : node.type === 'lineFluidNode' ? 'fluid' : 'item';
+    const kind =
+      node.type === 'lineMachineNode'
+        ? 'machine'
+        : node.type === 'lineFluidNode'
+          ? 'fluid'
+          : 'item';
     const { width, height } = nodeSize(node.type);
     const itemKeyCandidate = data.itemKey as ItemKeyLike | undefined;
     const itemKey = itemKeyCandidate?.id ? itemKeyCandidate : null;
     const machineItemId = typeof data.machineItemId === 'string' ? data.machineItemId : null;
+    const machineCount = machineCountText(data.machineCount);
     map.set(node.id, {
       id: node.id,
       kind,
@@ -442,29 +554,56 @@ const baseNodeById = computed(() => {
       accent: kind === 'machine' ? '#6b7280' : itemAccentColor(itemKey, machineItemId),
       isSurplus: !!data.isSurplus,
       isRoot: !!data.isRoot,
+      ...(machineCount ? { machineCountText: machineCount } : {}),
     });
   });
   return map;
 });
 
-const orderYById = computed(() => {
-  const map = new Map<string, number>();
-  props.nodes.forEach((node) => {
-    map.set(node.id, finiteOr(node.position?.y, 0));
-  });
+function stableNodeOrder(a: string, b: string): number {
+  const at = (baseNodeById.value.get(a)?.title ?? a).trim();
+  const bt = (baseNodeById.value.get(b)?.title ?? b).trim();
+  const cmp = at.localeCompare(bt, 'zh-Hans-CN');
+  if (cmp !== 0) return cmp;
+  return a.localeCompare(b);
+}
+
+const kindById = computed(() => {
+  const map = new Map<string, NodeKind>();
+  baseNodeById.value.forEach((v, k) => map.set(k, v.kind));
   return map;
 });
 
-const inByTarget = computed(() => {
+const producersByResource = computed(() => {
   const map = new Map<string, string[]>();
-  props.nodes.forEach((n) => map.set(n.id, []));
-  props.edges.forEach((edge) => {
-    if (!map.has(edge.target) || !baseNodeById.value.has(edge.source)) return;
-    (map.get(edge.target) ?? []).push(edge.source);
+  props.nodes.forEach((n) => {
+    const kind = kindById.value.get(n.id);
+    if (kind === 'item' || kind === 'fluid') map.set(n.id, []);
   });
-  map.forEach((arr) =>
-    arr.sort((a, b) => (orderYById.value.get(a) ?? 0) - (orderYById.value.get(b) ?? 0)),
-  );
+  props.edges.forEach((edge) => {
+    const sk = kindById.value.get(edge.source);
+    const tk = kindById.value.get(edge.target);
+    if (sk === 'machine' && (tk === 'item' || tk === 'fluid')) {
+      map.get(edge.target)?.push(edge.source);
+    }
+  });
+  map.forEach((arr) => arr.sort(stableNodeOrder));
+  return map;
+});
+
+const ingredientsByMachine = computed(() => {
+  const map = new Map<string, string[]>();
+  props.nodes.forEach((n) => {
+    if (kindById.value.get(n.id) === 'machine') map.set(n.id, []);
+  });
+  props.edges.forEach((edge) => {
+    const sk = kindById.value.get(edge.source);
+    const tk = kindById.value.get(edge.target);
+    if ((sk === 'item' || sk === 'fluid') && tk === 'machine') {
+      map.get(edge.target)?.push(edge.source);
+    }
+  });
+  map.forEach((arr) => arr.sort(stableNodeOrder));
   return map;
 });
 
@@ -476,17 +615,57 @@ const outDegreeById = computed(() => {
 });
 
 const chosenRootId = computed(() => {
-  if (props.selectedNodeId && baseNodeById.value.get(props.selectedNodeId)?.kind === 'item') {
-    return props.selectedNodeId;
+  if (props.selectedNodeId) {
+    const k = kindById.value.get(props.selectedNodeId);
+    if (k === 'item' || k === 'fluid') return props.selectedNodeId;
   }
-  const explicit = Array.from(baseNodeById.value.values()).find((n) => n.kind === 'item' && n.isRoot);
+  const explicit = Array.from(baseNodeById.value.values()).find(
+    (n) => (n.kind === 'item' || n.kind === 'fluid') && n.isRoot,
+  );
   if (explicit) return explicit.id;
   const sink = Array.from(baseNodeById.value.values()).find(
-    (n) => n.kind === 'item' && (outDegreeById.value.get(n.id) ?? 0) === 0,
+    (n) => (n.kind === 'item' || n.kind === 'fluid') && (outDegreeById.value.get(n.id) ?? 0) === 0,
   );
   if (sink) return sink.id;
+  const firstResource = Array.from(baseNodeById.value.values()).find(
+    (n) => n.kind === 'item' || n.kind === 'fluid',
+  );
+  if (firstResource) return firstResource.id;
   return props.nodes[0]?.id ?? '';
 });
+
+function resourceCenterY(node: NodeView): number {
+  return node.y + 24;
+}
+
+function machineCenterY(node: NodeView): number {
+  return node.y + 24;
+}
+
+function orthPath(parent: NodeView, child: NodeView): string {
+  if ((parent.kind === 'item' || parent.kind === 'fluid') && child.kind === 'machine') {
+    const px = parent.x;
+    const py = resourceCenterY(parent);
+    const cx = child.x + child.width;
+    const cy = machineCenterY(child);
+    const trunkX = parent.x - 8;
+    return `M ${cx} ${cy} L ${trunkX} ${cy} L ${trunkX} ${py} L ${px} ${py}`;
+  }
+  if (parent.kind === 'machine' && (child.kind === 'item' || child.kind === 'fluid')) {
+    const px = parent.x;
+    const py = machineCenterY(parent);
+    const cx = child.x + child.width;
+    const cy = resourceCenterY(child);
+    const trunkX = parent.x - 8;
+    return `M ${px} ${py} L ${trunkX} ${py} L ${trunkX} ${cy} L ${cx} ${cy}`;
+  }
+  const sx = parent.x + parent.width;
+  const sy = parent.y + parent.height / 2;
+  const tx = child.x;
+  const ty = child.y + child.height / 2;
+  const mx = (sx + tx) / 2;
+  return `M ${sx} ${sy} L ${mx} ${sy} L ${mx} ${ty} L ${tx} ${ty}`;
+}
 
 const layoutResult = computed(() => {
   const rootId = chosenRootId.value;
@@ -495,20 +674,43 @@ const layoutResult = computed(() => {
   }
 
   let uidSeq = 0;
-  const buildTree = (id: string, depth: number, path: string[]): TreeNode => {
-    const duplicate = path.includes(id);
+  let builtCount = 0;
+  const MAX_NODES = 10000;
+  const MAX_DEPTH = 40;
+  const visitedIds = new Set<string>();
+  const buildTree = (id: string, depth: number, resourcePath: string[]): TreeNode => {
+    const kind = kindById.value.get(id) ?? 'item';
+    const cycleAncestor = (kind === 'item' || kind === 'fluid') && resourcePath.includes(id);
+    const alreadyExpanded = visitedIds.has(id);
+    const duplicate = cycleAncestor || alreadyExpanded;
     const node: TreeNode = {
       uid: `tn_${uidSeq++}`,
       id,
+      kind,
       depth,
       position: 0,
       duplicate,
       children: [],
       thread: null,
-      threadOffset: null,
+      threadOffset: undefined,
     };
-    if (duplicate) return node;
-    node.children = (inByTarget.value.get(id) ?? []).map((childId) => buildTree(childId, depth + 1, [...path, id]));
+
+    builtCount += 1;
+    if (duplicate || builtCount >= MAX_NODES || depth >= MAX_DEPTH) return node;
+
+    visitedIds.add(id);
+
+    if (kind === 'machine') {
+      node.children = (ingredientsByMachine.value.get(id) ?? []).map((childId) =>
+        buildTree(childId, depth + 1, resourcePath),
+      );
+      return node;
+    }
+
+    const nextPath = [...resourcePath, id];
+    node.children = (producersByResource.value.get(id) ?? []).map((childId) =>
+      buildTree(childId, depth, nextPath),
+    );
     return node;
   };
 
@@ -520,7 +722,9 @@ const layoutResult = computed(() => {
   let maxDepth = 0;
   const walk = (node: TreeNode) => {
     flatTree.push(node);
-    maxDepth = Math.max(maxDepth, node.depth);
+    if (node.kind !== 'machine') {
+      maxDepth = Math.max(maxDepth, node.depth);
+    }
     node.children.forEach((child) => {
       treeEdges.push({ source: node, target: child });
       walk(child);
@@ -529,14 +733,17 @@ const layoutResult = computed(() => {
   walk(root);
 
   const CellWidth = 184;
-  const CellHeight = 78;
-  const LeftPad = 20;
+  const CellHeight = 72;
+  const LeftPad = 24;
   const TopPad = 24;
 
   const nodes: NodeView[] = flatTree.map((t) => {
     const base = baseNodeById.value.get(t.id)!;
-    const x = LeftPad + (maxDepth - t.depth) * CellWidth + (base.kind === 'machine' ? 92 : 8);
-    const y = TopPad + t.position * CellHeight + (base.kind === 'machine' ? 8 : 0);
+    const x =
+      t.kind === 'machine'
+        ? LeftPad + (maxDepth - t.depth) * CellWidth + 100
+        : LeftPad + (maxDepth - t.depth + 1) * CellWidth + 20;
+    const y = TopPad + t.position * CellHeight + (t.kind === 'machine' ? 12 : 0);
     return {
       uid: t.uid,
       id: t.id,
@@ -554,11 +761,32 @@ const layoutResult = computed(() => {
       isSurplus: base.isSurplus,
       isRoot: base.isRoot,
       duplicate: t.duplicate,
+      ...(base.machineCountText ? { machineCountText: base.machineCountText } : {}),
     };
   });
 
+  if (nodes.length > 0) {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    nodes.forEach((n) => {
+      minX = Math.min(minX, n.x);
+      minY = Math.min(minY, n.y);
+    });
+    const shiftX = minX < 20 ? 20 - minX : 0;
+    const shiftY = minY < 20 ? 20 - minY : 0;
+    if (shiftX || shiftY) {
+      nodes.forEach((n) => {
+        n.x += shiftX;
+        n.y += shiftY;
+      });
+    }
+  }
+
   const nodeByUid = new Map(nodes.map((n) => [n.uid, n] as const));
-  const styleByPair = new Map<string, { lineWidth: number; stroke: string; opacity: number; strokeDasharray: string }>();
+  const styleByPair = new Map<
+    string,
+    { lineWidth: number; stroke: string; opacity: number; strokeDasharray: string }
+  >();
   props.edges.forEach((e) => {
     if (styleByPair.has(`${e.source}->${e.target}`)) return;
     const style = styleObject(e.style);
@@ -570,57 +798,25 @@ const layoutResult = computed(() => {
     });
   });
 
-  const grouped = new Map<string, Array<{ sourceUid: string; targetUid: string; sourceId: string; targetId: string }>>();
-  treeEdges.forEach((e) => {
-    const arr = grouped.get(e.source.uid);
-    const item = { sourceUid: e.source.uid, targetUid: e.target.uid, sourceId: e.source.id, targetId: e.target.id };
-    if (arr) arr.push(item);
-    else grouped.set(e.source.uid, [item]);
-  });
-
-  const edges: EdgeView[] = [];
-  grouped.forEach((arr, sourceUid) => {
-    const source = nodeByUid.get(sourceUid);
-    if (!source) return;
-    const arranged = arr
-      .map((e) => {
-        const target = nodeByUid.get(e.targetUid);
-        return target ? { ...e, target } : null;
-      })
-      .filter((x): x is NonNullable<typeof x> => x !== null)
-      .sort((a, b) => (a.target.y + a.target.height / 2) - (b.target.y + b.target.height / 2));
-
-    arranged.forEach((e, i) => {
-      const sourceCx = source.x + source.width / 2;
-      const targetCx = e.target.x + e.target.width / 2;
-      const toRight = targetCx >= sourceCx;
-      const sx = toRight ? source.x + source.width : source.x;
-      const tx = toRight ? e.target.x : e.target.x + e.target.width;
-      const sy = source.y + source.height / 2;
-      const ty = e.target.y + e.target.height / 2;
-      const sign = toRight ? 1 : -1;
-      const trunkX = sx + sign * 24;
-      const path =
-        arranged.length === 1 && Math.abs(ty - sy) < 1
-          ? `M ${sx} ${sy} L ${tx} ${ty}`
-          : `M ${sx} ${sy} L ${trunkX} ${sy} L ${trunkX} ${ty} L ${tx} ${ty}`;
-      const style = styleByPair.get(`${e.targetId}->${e.sourceId}`) ?? {
-        lineWidth: 2,
-        stroke: '#666666',
-        opacity: 0.95,
-        strokeDasharray: '',
-      };
-      edges.push({
-        id: `te_${sourceUid}_${i}`,
-        sourceUid: e.sourceUid,
-        targetUid: e.targetUid,
-        path,
-        lineWidth: style.lineWidth,
-        stroke: style.stroke,
-        opacity: style.opacity,
-        strokeDasharray: style.strokeDasharray,
-      });
-    });
+  const edges: EdgeView[] = treeEdges.map((e, i) => {
+    const source = nodeByUid.get(e.source.uid)!;
+    const target = nodeByUid.get(e.target.uid)!;
+    const style = styleByPair.get(`${e.target.id}->${e.source.id}`) ?? {
+      lineWidth: 2,
+      stroke: '#666666',
+      opacity: 0.95,
+      strokeDasharray: '',
+    };
+    return {
+      id: `te_${i}`,
+      sourceUid: e.source.uid,
+      targetUid: e.target.uid,
+      path: orthPath(source, target),
+      lineWidth: style.lineWidth,
+      stroke: style.stroke,
+      opacity: style.opacity,
+      strokeDasharray: style.strokeDasharray,
+    };
   });
 
   return { nodes, edges };
@@ -637,16 +833,20 @@ const bounds = computed(() => {
   let maxX = Number.NEGATIVE_INFINITY;
   let maxY = Number.NEGATIVE_INFINITY;
   nodes.forEach((n) => {
-    minX = Math.min(minX, n.x);
-    minY = Math.min(minY, n.y);
-    maxX = Math.max(maxX, n.x + n.width);
-    maxY = Math.max(maxY, n.y + n.height);
+    minX = Math.min(minX, n.x - 40);
+    minY = Math.min(minY, n.y - 40);
+    maxX = Math.max(maxX, n.x + n.width + 80);
+    maxY = Math.max(maxY, n.y + n.height + 80);
   });
   return { minX, minY, maxX, maxY };
 });
 
-const boardWidth = computed(() => Math.max(960, Math.ceil(bounds.value.maxX + 60)));
-const boardHeight = computed(() => Math.max(520, Math.ceil(bounds.value.maxY + 60)));
+const boardWidth = computed(() =>
+  Math.max(960, Math.ceil(bounds.value.maxX - Math.min(0, bounds.value.minX))),
+);
+const boardHeight = computed(() =>
+  Math.max(520, Math.ceil(bounds.value.maxY - Math.min(0, bounds.value.minY))),
+);
 
 function spriteWrapStyle(icon: Extract<IconVisual, { kind: 'sprite' }>) {
   return {
@@ -668,6 +868,10 @@ function spriteImageStyle(icon: Extract<IconVisual, { kind: 'sprite' }>, targetS
 }
 
 const viewportEl = ref<HTMLElement | null>(null);
+const markerPrefix = `fz_${Math.random().toString(36).slice(2, 8)}`;
+function markerId(edgeId: string): string {
+  return `${markerPrefix}_${edgeId.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+}
 const zoom = ref(1);
 const panX = ref(24);
 const panY = ref(24);
@@ -675,8 +879,7 @@ const isPanning = ref(false);
 const hasInteracted = ref(false);
 
 const stageStyle = computed(() => ({
-  transform: `translate(${panX.value}px, ${panY.value}px)`,
-  zoom: `${zoom.value}`,
+  transform: `translate3d(${panX.value}px, ${panY.value}px, 0) scale(${zoom.value})`,
 }));
 
 let panPointerId: number | null = null;
@@ -706,8 +909,8 @@ function zoomBy(factor: number, clientX?: number, clientY?: number) {
   const viewport = viewportEl.value;
   if (!viewport) return;
   const rect = viewport.getBoundingClientRect();
-  const cx = clientX ?? (rect.left + rect.width / 2);
-  const cy = clientY ?? (rect.top + rect.height / 2);
+  const cx = clientX ?? rect.left + rect.width / 2;
+  const cy = clientY ?? rect.top + rect.height / 2;
   const vx = cx - rect.left;
   const vy = cy - rect.top;
   const worldX = (vx - panX.value) / zoom.value;
@@ -781,11 +984,15 @@ function onNodeHoverEnter(node: NodeView) {
   emit('item-hover', node.itemKey);
 }
 
-watch([boardWidth, boardHeight], async () => {
-  if (hasInteracted.value) return;
-  await nextTick();
-  fitView();
-}, { immediate: true });
+watch(
+  [boardWidth, boardHeight],
+  async () => {
+    if (hasInteracted.value) return;
+    await nextTick();
+    fitView();
+  },
+  { immediate: true },
+);
 
 onBeforeUnmount(() => {
   window.removeEventListener('pointermove', onPointerMove);
@@ -801,8 +1008,8 @@ onBeforeUnmount(() => {
   height: 100%;
   overflow: hidden;
   border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.45);
-  background: #d6d6d6;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: #fff;
   cursor: grab;
 }
 
@@ -820,13 +1027,13 @@ onBeforeUnmount(() => {
   gap: 4px;
   padding: 4px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.86);
-  border: 1px solid rgba(100, 116, 139, 0.3);
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(100, 116, 139, 0.26);
 }
 
 .fresky-flow__tool-btn {
   border: 1px solid rgba(100, 116, 139, 0.45);
-  background: #fff;
+  background: rgba(255, 255, 255, 0.96);
   color: #111827;
   width: 24px;
   height: 24px;
@@ -886,25 +1093,21 @@ onBeforeUnmount(() => {
 
 .fresky-node--item,
 .fresky-node--fluid {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 5px;
+  display: grid;
+  grid-template-rows: 48px 24px;
+  grid-template-columns: 12px 48px 12px;
 }
 
 .fresky-node--machine {
-  border-radius: 8px;
-  border: 1px solid rgba(100, 116, 139, 0.35);
-  background: rgba(235, 235, 235, 0.92);
-  box-shadow: 0 2px 8px rgba(2, 6, 23, 0.1);
-  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: 12px 72px 12px;
+  grid-template-rows: 12px 24px 12px;
+  position: relative;
+  cursor: default;
 }
 
 .fresky-node__machine-inner {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  display: none;
 }
 
 .fresky-node__machine-icon-wrap {
@@ -943,30 +1146,29 @@ onBeforeUnmount(() => {
 }
 
 .fresky-node__icon-wrap {
-  width: 66px;
-  height: 66px;
-  border-radius: 8px;
-  border: 1px solid rgba(100, 116, 139, 0.2);
-  background: #dfdfdf;
-  box-shadow: 0 2px 7px rgba(2, 6, 23, 0.14);
+  grid-area: 1 / 2 / 1 / 2;
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+  background: #d7dde4;
+  box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
   display: grid;
   place-items: center;
   cursor: pointer;
 }
 
 .fresky-node__icon {
-  width: 50px;
-  height: 50px;
+  width: 48px;
+  height: 48px;
   object-fit: contain;
-  image-rendering: -webkit-optimize-contrast;
-  image-rendering: crisp-edges;
+  image-rendering: auto;
 }
 
 .fresky-node__sprite-wrap {
-  width: 50px;
-  height: 50px;
+  width: 48px;
+  height: 48px;
   overflow: hidden;
-  border-radius: 6px;
+  border-radius: 4px;
 }
 
 .fresky-node__sprite-wrap--small {
@@ -980,20 +1182,33 @@ onBeforeUnmount(() => {
 }
 
 .fresky-node__icon-fallback {
-  width: 50px;
-  height: 50px;
-  border-radius: 6px;
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
   display: grid;
   place-items: center;
   font-weight: 700;
   color: #1f2937;
-  background: rgba(148, 163, 184, 0.2);
+}
+
+.fresky-node__duplicate-dot {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: 1px;
+  color: #1f2937;
 }
 
 .fresky-node__title {
-  max-width: 112px;
-  font-size: 13px;
-  line-height: 1.15;
+  grid-area: 2 / 1 / 2 / 4;
+  width: 108px;
+  margin-left: -18px;
+  font-size: 12px;
+  line-height: 16px;
+  padding: 4px 0;
   text-align: center;
   color: #111827;
   overflow: hidden;
@@ -1002,58 +1217,80 @@ onBeforeUnmount(() => {
 }
 
 .fresky-node__sub {
-  max-width: 112px;
-  font-size: 12px;
-  line-height: 1.2;
-  text-align: center;
-  color: #374151;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none;
 }
 
 .fresky-node__machine-title {
-  font-size: 13px;
-  line-height: 1.15;
+  grid-area: 2 / 2 / 2 / 2;
+  line-height: 18px;
+  text-align: center;
+  font-size: 12px;
+  width: 64px;
+  margin: 0 auto;
+  padding: 3px 4px 1px 4px;
+  border-radius: 4px;
+  background: #d7dde4;
+  box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
   color: #111827;
-  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .fresky-node__machine-sub {
-  margin-top: 3px;
+  grid-area: 1 / 2 / 1 / 2;
   font-size: 11px;
+  line-height: 12px;
+  text-align: center;
   color: #374151;
-  text-align: left;
-  line-height: 1.2;
-  max-height: 2.4em;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fresky-node__machine-count {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  font-size: 10px;
+  line-height: 12px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.88);
+  color: #e2e8f0;
 }
 
 .fresky-node--selected.fresky-node--machine {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5);
+  border-color: transparent;
+  box-shadow: none;
 }
 
+.fresky-node--selected.fresky-node--machine .fresky-node__machine-title,
 .fresky-node--selected .fresky-node__icon-wrap {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.45), 0 2px 7px rgba(2, 6, 23, 0.14);
+  box-shadow:
+    0 0 0 2px rgba(245, 166, 35, 0.85),
+    2px 2px 5px rgba(0, 0, 0, 0.2);
 }
 
 .fresky-node--surplus .fresky-node__icon-wrap {
-  border-color: #f59e0b;
+  box-shadow:
+    0 0 0 2px rgba(245, 158, 11, 0.8),
+    2px 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+.fresky-node--duplicate .fresky-node__icon-wrap {
+  background: transparent;
+  box-shadow: none;
 }
 
 .body--dark .fresky-flow {
-  border-color: rgba(148, 163, 184, 0.4);
-  background: #30343a;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .body--dark .fresky-flow__toolbar {
-  background: rgba(15, 23, 42, 0.74);
-  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.78);
+  border-color: rgba(148, 163, 184, 0.33);
 }
 
 .body--dark .fresky-flow__tool-btn {
@@ -1081,22 +1318,27 @@ onBeforeUnmount(() => {
 }
 
 .body--dark .fresky-node--machine {
-  border-color: rgba(148, 163, 184, 0.65);
-  background: rgba(15, 23, 42, 0.62);
+  border-color: transparent;
+  background: transparent;
 }
 
 .body--dark .fresky-node__icon-wrap {
-  background: rgba(15, 23, 42, 0.85);
-  border-color: rgba(148, 163, 184, 0.4);
-}
-
-.body--dark .fresky-node__machine-icon-wrap {
-  background: rgba(15, 23, 42, 0.86);
+  background: rgba(73, 95, 123, 0.88);
   border-color: rgba(148, 163, 184, 0.4);
 }
 
 .body--dark .fresky-node__icon-fallback {
   color: #cbd5e1;
   background: rgba(148, 163, 184, 0.18);
+}
+
+.body--dark .fresky-node__machine-title {
+  background: rgba(9, 28, 62, 0.86);
+  color: #e2e8f0;
+}
+
+.body--dark .fresky-node__machine-count {
+  background: rgba(226, 232, 240, 0.16);
+  color: #f8fafc;
 }
 </style>
