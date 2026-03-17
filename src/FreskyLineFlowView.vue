@@ -20,21 +20,6 @@
         :style="{ width: `${boardWidth}px`, height: `${boardHeight}px` }"
       >
         <svg class="fresky-flow__edges" :viewBox="`0 0 ${boardWidth} ${boardHeight}`" preserveAspectRatio="none">
-          <defs>
-            <marker
-              v-for="edge in edgeViews"
-              :key="edge.markerId"
-              :id="edge.markerId"
-              markerWidth="9"
-              markerHeight="9"
-              refX="8"
-              refY="4.5"
-              orient="auto"
-              markerUnits="strokeWidth"
-            >
-              <path d="M0,0 L9,4.5 L0,9 z" :fill="edge.stroke" />
-            </marker>
-          </defs>
           <g v-for="edge in edgeViews" :key="edge.id">
             <path
               :d="edge.path"
@@ -44,19 +29,10 @@
               :stroke-opacity="edge.opacity"
               :stroke-dasharray="edge.strokeDasharray"
               stroke-linecap="round"
-              :marker-end="`url(#${edge.markerId})`"
+              stroke-linejoin="round"
             />
           </g>
         </svg>
-
-        <div
-          v-for="edge in edgeViews"
-          :key="`${edge.id}:label`"
-          class="fresky-flow__edge-label"
-          :style="{ left: `${edge.labelX}px`, top: `${edge.labelY}px` }"
-        >
-          {{ edge.label }}
-        </div>
 
         <div
           v-for="node in nodeViews"
@@ -78,7 +54,19 @@
           <template v-if="node.kind === 'machine'">
             <div class="fresky-node__machine-inner">
               <div class="fresky-node__machine-icon-wrap">
-                <img v-if="node.iconUrl" class="fresky-node__machine-icon" :src="node.iconUrl" :alt="node.title" />
+                <img
+                  v-if="node.icon.kind === 'image'"
+                  class="fresky-node__machine-icon"
+                  :src="node.icon.src"
+                  :alt="node.title"
+                />
+                <div
+                  v-else-if="node.icon.kind === 'sprite'"
+                  class="fresky-node__sprite-wrap fresky-node__sprite-wrap--small"
+                  :style="spriteWrapStyle(node.icon)"
+                >
+                  <div class="fresky-node__sprite-image" :style="spriteImageStyle(node.icon, 32)" />
+                </div>
                 <div v-else class="fresky-node__machine-icon-fallback">M</div>
               </div>
               <div class="fresky-node__machine-meta">
@@ -95,7 +83,19 @@
               @mouseenter="onNodeHoverEnter(node)"
               @mouseleave="emit('item-leave')"
             >
-              <img v-if="node.iconUrl" class="fresky-node__icon" :src="node.iconUrl" :alt="node.title" />
+              <img
+                v-if="node.icon.kind === 'image'"
+                class="fresky-node__icon"
+                :src="node.icon.src"
+                :alt="node.title"
+              />
+              <div
+                v-else-if="node.icon.kind === 'sprite'"
+                class="fresky-node__sprite-wrap"
+                :style="spriteWrapStyle(node.icon)"
+              >
+                <div class="fresky-node__sprite-image" :style="spriteImageStyle(node.icon, 50)" />
+              </div>
               <div v-else class="fresky-node__icon-fallback">{{ node.shortName }}</div>
             </div>
             <div class="fresky-node__title">{{ node.title }}</div>
@@ -117,10 +117,12 @@ type ItemKeyLike = {
 };
 
 type ItemDefLike = {
-  key?: { id?: string };
+  key?: ItemKeyLike;
   icon?: string;
   iconSprite?: {
     url?: string;
+    position?: string;
+    size?: number;
     color?: string;
   };
   rarity?: {
@@ -142,11 +144,16 @@ type FlowEdge = {
   id: string;
   source: string;
   target: string;
-  label?: unknown;
   style?: unknown;
 };
 
+type IconVisual =
+  | { kind: 'none' }
+  | { kind: 'image'; src: string }
+  | { kind: 'sprite'; url: string; position: string; size: number; color: string | null };
+
 type NodeView = {
+  uid: string;
   id: string;
   kind: 'item' | 'machine' | 'fluid';
   title: string;
@@ -155,24 +162,35 @@ type NodeView = {
   y: number;
   width: number;
   height: number;
-  iconUrl: string;
+  icon: IconVisual;
   shortName: string;
   itemKey: ItemKeyLike | null;
   accent: string;
   isSurplus: boolean;
+  isRoot: boolean;
+  duplicate: boolean;
 };
 
 type EdgeView = {
   id: string;
-  markerId: string;
+  sourceUid: string;
+  targetUid: string;
   path: string;
   lineWidth: number;
   stroke: string;
   opacity: number;
   strokeDasharray: string;
-  label: string;
-  labelX: number;
-  labelY: number;
+};
+
+type TreeNode = {
+  uid: string;
+  id: string;
+  depth: number;
+  position: number;
+  duplicate: boolean;
+  children: TreeNode[];
+  thread: TreeNode | null;
+  threadOffset: number | null;
 };
 
 const props = defineProps<{
@@ -211,23 +229,53 @@ function parseDash(value: unknown): string {
   return '';
 }
 
-function pickItemDefById(itemId: string | undefined): ItemDefLike | undefined {
-  if (!itemId) return undefined;
-  const defs = Object.values(props.itemDefsByKeyHash);
-  return defs.find((d) => d?.key?.id === itemId);
+function stableText(v: unknown): string {
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return '';
+  }
 }
 
-function itemAccentColor(itemId: string | undefined): string {
-  const def = pickItemDefById(itemId);
+function sameItemKey(a: ItemKeyLike | null, b: ItemKeyLike | null): boolean {
+  if (!a || !b) return false;
+  return a.id === b.id && a.meta === b.meta && stableText(a.nbt) === stableText(b.nbt);
+}
+
+function pickItemDef(itemKey: ItemKeyLike | null, machineItemId: string | null): ItemDefLike | undefined {
+  const defs = Object.values(props.itemDefsByKeyHash);
+  if (itemKey) {
+    const exact = defs.find((d) => sameItemKey(itemKey, d.key ?? null));
+    if (exact) return exact;
+    const byId = defs.find((d) => d.key?.id === itemKey.id);
+    if (byId) return byId;
+  }
+  if (machineItemId) return defs.find((d) => d.key?.id === machineItemId);
+  return undefined;
+}
+
+function itemAccentColor(itemKey: ItemKeyLike | null, machineItemId: string | null): string {
+  const def = pickItemDef(itemKey, machineItemId);
   return def?.rarity?.color || def?.iconSprite?.color || '#9ca3af';
 }
 
-function itemIcon(itemId: string | undefined): string {
-  const def = pickItemDefById(itemId);
-  if (!def) return '';
-  if (typeof def.icon === 'string' && def.icon.trim()) return def.icon.trim();
-  if (typeof def.iconSprite?.url === 'string' && def.iconSprite.url.trim()) return def.iconSprite.url.trim();
-  return '';
+function nodeIcon(itemKey: ItemKeyLike | null, machineItemId: string | null): IconVisual {
+  const def = pickItemDef(itemKey, machineItemId);
+  if (!def) return { kind: 'none' };
+  if (typeof def.icon === 'string' && def.icon.trim()) {
+    return { kind: 'image', src: def.icon.trim() };
+  }
+  const sprite = def.iconSprite;
+  if (sprite?.url && sprite.position) {
+    return {
+      kind: 'sprite',
+      url: sprite.url,
+      position: sprite.position,
+      size: Math.max(1, Math.round(finiteOr(sprite.size, 64))),
+      color: typeof sprite.color === 'string' && sprite.color.trim() ? sprite.color.trim() : null,
+    };
+  }
+  return { kind: 'none' };
 }
 
 function styleObject(value: unknown): Record<string, unknown> {
@@ -249,121 +297,365 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function cubicPointAt(
-  t: number,
-  p0: { x: number; y: number },
-  p1: { x: number; y: number },
-  p2: { x: number; y: number },
-  p3: { x: number; y: number },
-) {
-  const mt = 1 - t;
-  const mt2 = mt * mt;
-  const t2 = t * t;
-  const x = (mt2 * mt * p0.x) + (3 * mt2 * t * p1.x) + (3 * mt * t2 * p2.x) + (t2 * t * p3.x);
-  const y = (mt2 * mt * p0.y) + (3 * mt2 * t * p1.y) + (3 * mt * t2 * p2.y) + (t2 * t * p3.y);
-  return { x, y };
+function layoutTree(root: TreeNode) {
+  const MinDistance = 1;
+  const setup = (thisNode: TreeNode) => {
+    thisNode.children.filter((c) => c.children.length > 0).forEach(setup);
+    if (thisNode.children.length === 1) {
+      thisNode.children[0]!.position = 0;
+      return;
+    }
+    if (thisNode.children.length === 0) return;
+
+    const childCount = thisNode.children.length;
+    const childIndexes = Array.from({ length: childCount }, (_, i) => i);
+    childIndexes.forEach((idx) => {
+      thisNode.children[idx]!.position = idx === 0 ? 0 : MinDistance;
+    });
+
+    let activeIndexes = childIndexes.slice();
+    const leftCursors: Array<TreeNode | null> = thisNode.children.slice();
+    const leftOffsets = thisNode.children.map(() => 0);
+    const rightCursors: Array<TreeNode | null> = thisNode.children.slice();
+    const rightOffsets = thisNode.children.map(() => 0);
+
+    let leftmost = 0;
+    const rightmost = childIndexes.map((idx) =>
+      idx === childCount - 1
+        ? { node: thisNode.children[idx] ?? null, offset: 0 }
+        : { node: null, offset: Number.NEGATIVE_INFINITY },
+    );
+
+    while (activeIndexes.length > 0) {
+      for (const idx of activeIndexes) {
+        const l = leftCursors[idx];
+        if (l?.thread) {
+          leftOffsets[idx] = (leftOffsets[idx] ?? 0) + (l.threadOffset ?? 0);
+          leftCursors[idx] = l.thread;
+        } else if (l && l.children.length > 0) {
+          const child = l.children[0] ?? null;
+          leftCursors[idx] = child;
+          leftOffsets[idx] = (leftOffsets[idx] ?? 0) + (child?.position ?? 0);
+        } else if (idx !== activeIndexes[0] || activeIndexes.length === 1) {
+          leftCursors[idx] = null;
+        }
+
+        const r = rightCursors[idx];
+        if (r?.thread) {
+          rightOffsets[idx] = (rightOffsets[idx] ?? 0) + (r.threadOffset ?? 0);
+          rightCursors[idx] = r.thread;
+        } else if (r && r.children.length > 0) {
+          const child = r.children[r.children.length - 1] ?? null;
+          rightCursors[idx] = child;
+          rightOffsets[idx] = (rightOffsets[idx] ?? 0) + (child?.position ?? 0);
+        } else if (idx !== activeIndexes[activeIndexes.length - 1] || activeIndexes.length === 1) {
+          rightCursors[idx] = null;
+        }
+      }
+
+      const nextActive = activeIndexes.filter((idx, i) => (i === 0 ? !!rightCursors[idx] : !!leftCursors[idx]));
+      if (nextActive.length > 1) {
+        for (let i = 0; i < nextActive.length - 1; i += 1) {
+          const li = nextActive[i]!;
+          const ri = nextActive[i + 1]!;
+          let dist = 0;
+          for (let c = li + 1; c <= ri; c += 1) dist += thisNode.children[c]!.position;
+          if (dist + leftOffsets[ri]! - rightOffsets[li]! < MinDistance) {
+            const inc = MinDistance - leftOffsets[ri]! + rightOffsets[li]! - dist;
+            if (li + 1 === ri) thisNode.children[ri]!.position += inc;
+            else {
+              for (let c = li + 1; c <= ri; c += 1) thisNode.children[c]!.position += inc / (ri - li);
+            }
+          }
+        }
+      }
+
+      activeIndexes = nextActive;
+      if (activeIndexes.length > 0) {
+        const lIdx = activeIndexes[0]!;
+        leftmost = Math.min(leftmost, leftOffsets[lIdx]!);
+        const rIdx = activeIndexes[activeIndexes.length - 1]!;
+        if (!rightmost[rIdx]!.node || rightmost[rIdx]!.offset < rightOffsets[rIdx]!) {
+          rightmost[rIdx]!.node = rightCursors[rIdx] ?? null;
+          rightmost[rIdx]!.offset = rightOffsets[rIdx]!;
+        }
+      }
+    }
+
+    let dist = 0;
+    let rightMostPos = 0;
+    for (const idx of childIndexes) {
+      if (idx !== 0) dist += thisNode.children[idx]!.position;
+      if (rightmost[idx]!.node) rightMostPos = Math.max(rightMostPos, dist + rightmost[idx]!.offset);
+    }
+
+    let cur = -(leftmost + rightMostPos) / 2;
+    thisNode.children.forEach((child) => {
+      cur = child.position += cur;
+    });
+  };
+
+  setup(root);
+
+  let cursor = root;
+  let cursorPos = 0;
+  let minCursorPos = 0;
+  while (true) {
+    if (cursor.thread) {
+      cursorPos += cursor.threadOffset ?? 0;
+      cursor = cursor.thread;
+      minCursorPos = Math.min(minCursorPos, cursorPos);
+    } else if (cursor.children.length > 0) {
+      cursor = cursor.children[0]!;
+      cursorPos += cursor.position;
+      minCursorPos = Math.min(minCursorPos, cursorPos);
+    } else break;
+  }
+
+  const setPosition = (node: TreeNode, position: number) => {
+    node.position = position;
+    node.thread = null;
+    node.threadOffset = null;
+    node.children.forEach((child) => setPosition(child, position + child.position));
+  };
+  setPosition(root, -minCursorPos);
 }
 
-const rawNodeViews = computed(() => {
-  return props.nodes.map((node) => {
+const baseNodeById = computed(() => {
+  const map = new Map<string, Omit<NodeView, 'uid' | 'x' | 'y' | 'shortName' | 'duplicate'>>();
+  props.nodes.forEach((node) => {
     const data = node.data ?? {};
     const kind = node.type === 'lineMachineNode' ? 'machine' : node.type === 'lineFluidNode' ? 'fluid' : 'item';
     const { width, height } = nodeSize(node.type);
     const itemKeyCandidate = data.itemKey as ItemKeyLike | undefined;
-    const itemKey = itemKeyCandidate?.id ? itemKeyCandidate : undefined;
-    const machineItemId = typeof data.machineItemId === 'string' ? data.machineItemId : undefined;
-    const itemId = itemKey?.id || machineItemId;
-    const subtitleRaw = typeof data.subtitle === 'string' ? data.subtitle : '';
-    return {
+    const itemKey = itemKeyCandidate?.id ? itemKeyCandidate : null;
+    const machineItemId = typeof data.machineItemId === 'string' ? data.machineItemId : null;
+    map.set(node.id, {
       id: node.id,
       kind,
       title: typeof data.title === 'string' ? data.title : node.id,
-      subtitle: subtitleRaw,
-      x: finiteOr(node.position?.x, 0),
-      y: finiteOr(node.position?.y, 0),
+      subtitle: typeof data.subtitle === 'string' ? data.subtitle : '',
       width,
       height,
-      iconUrl: kind === 'machine' ? '' : itemIcon(itemId),
-      shortName: initialChar(typeof data.title === 'string' ? data.title : '', node.id),
-      itemKey: itemKey ?? null,
-      accent: kind === 'machine' ? '#6b7280' : itemAccentColor(itemId),
+      icon: nodeIcon(itemKey, machineItemId),
+      itemKey,
+      accent: kind === 'machine' ? '#6b7280' : itemAccentColor(itemKey, machineItemId),
       isSurplus: !!data.isSurplus,
-    } satisfies NodeView;
+      isRoot: !!data.isRoot,
+    });
   });
+  return map;
 });
 
-const bounds = computed(() => {
-  const nodes = rawNodeViews.value;
-  if (!nodes.length) {
-    return { minX: 0, minY: 0, maxX: 960, maxY: 540 };
+const inByTarget = computed(() => {
+  const map = new Map<string, string[]>();
+  props.nodes.forEach((n) => map.set(n.id, []));
+  props.edges.forEach((edge) => {
+    if (!map.has(edge.target) || !baseNodeById.value.has(edge.source)) return;
+    (map.get(edge.target) ?? []).push(edge.source);
+  });
+  map.forEach((arr) => arr.sort((a, b) => a.localeCompare(b)));
+  return map;
+});
+
+const outDegreeById = computed(() => {
+  const map = new Map<string, number>();
+  props.nodes.forEach((n) => map.set(n.id, 0));
+  props.edges.forEach((e) => map.set(e.source, (map.get(e.source) ?? 0) + 1));
+  return map;
+});
+
+const chosenRootId = computed(() => {
+  if (props.selectedNodeId && baseNodeById.value.get(props.selectedNodeId)?.kind === 'item') {
+    return props.selectedNodeId;
   }
+  const explicit = Array.from(baseNodeById.value.values()).find((n) => n.kind === 'item' && n.isRoot);
+  if (explicit) return explicit.id;
+  const sink = Array.from(baseNodeById.value.values()).find(
+    (n) => n.kind === 'item' && (outDegreeById.value.get(n.id) ?? 0) === 0,
+  );
+  if (sink) return sink.id;
+  return props.nodes[0]?.id ?? '';
+});
+
+const layoutResult = computed(() => {
+  const rootId = chosenRootId.value;
+  if (!rootId || !baseNodeById.value.has(rootId)) {
+    return { nodes: [] as NodeView[], edges: [] as EdgeView[] };
+  }
+
+  let uidSeq = 0;
+  const buildTree = (id: string, depth: number, path: string[]): TreeNode => {
+    const duplicate = path.includes(id);
+    const node: TreeNode = {
+      uid: `tn_${uidSeq++}`,
+      id,
+      depth,
+      position: 0,
+      duplicate,
+      children: [],
+      thread: null,
+      threadOffset: null,
+    };
+    if (duplicate) return node;
+    node.children = (inByTarget.value.get(id) ?? []).map((childId) => buildTree(childId, depth + 1, [...path, id]));
+    return node;
+  };
+
+  const root = buildTree(rootId, 0, []);
+  layoutTree(root);
+
+  const flatTree: TreeNode[] = [];
+  const treeEdges: Array<{ source: TreeNode; target: TreeNode }> = [];
+  let maxDepth = 0;
+  const walk = (node: TreeNode) => {
+    flatTree.push(node);
+    maxDepth = Math.max(maxDepth, node.depth);
+    node.children.forEach((child) => {
+      treeEdges.push({ source: node, target: child });
+      walk(child);
+    });
+  };
+  walk(root);
+
+  const CellWidth = 176;
+  const CellHeight = 96;
+  const LeftPad = 20;
+  const TopPad = 24;
+
+  const nodes: NodeView[] = flatTree.map((t) => {
+    const base = baseNodeById.value.get(t.id)!;
+    const x = LeftPad + (maxDepth - t.depth) * CellWidth + (base.kind === 'machine' ? 72 : 8);
+    const y = TopPad + t.position * CellHeight + (base.kind === 'machine' ? 12 : 0);
+    return {
+      uid: t.uid,
+      id: t.id,
+      kind: base.kind,
+      title: base.title,
+      subtitle: base.subtitle,
+      x,
+      y,
+      width: base.width,
+      height: base.height,
+      icon: base.icon,
+      shortName: initialChar(base.title, t.id),
+      itemKey: base.itemKey,
+      accent: base.accent,
+      isSurplus: base.isSurplus,
+      isRoot: base.isRoot,
+      duplicate: t.duplicate,
+    };
+  });
+
+  const nodeByUid = new Map(nodes.map((n) => [n.uid, n] as const));
+  const styleByPair = new Map<string, { lineWidth: number; stroke: string; opacity: number; strokeDasharray: string }>();
+  props.edges.forEach((e) => {
+    if (styleByPair.has(`${e.source}->${e.target}`)) return;
+    const style = styleObject(e.style);
+    styleByPair.set(`${e.source}->${e.target}`, {
+      lineWidth: Math.max(1, finiteOr(style.strokeWidth, 2)),
+      stroke: typeof style.stroke === 'string' && style.stroke.trim() ? style.stroke : '#666666',
+      opacity: Math.max(0.1, Math.min(1, finiteOr(style.opacity, 0.95))),
+      strokeDasharray: parseDash(style.strokeDasharray),
+    });
+  });
+
+  const grouped = new Map<string, Array<{ sourceUid: string; targetUid: string; sourceId: string; targetId: string }>>();
+  treeEdges.forEach((e) => {
+    const arr = grouped.get(e.source.uid);
+    const item = { sourceUid: e.source.uid, targetUid: e.target.uid, sourceId: e.source.id, targetId: e.target.id };
+    if (arr) arr.push(item);
+    else grouped.set(e.source.uid, [item]);
+  });
+
+  const edges: EdgeView[] = [];
+  grouped.forEach((arr, sourceUid) => {
+    const source = nodeByUid.get(sourceUid);
+    if (!source) return;
+    const arranged = arr
+      .map((e) => {
+        const target = nodeByUid.get(e.targetUid);
+        return target ? { ...e, target } : null;
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .sort((a, b) => (a.target.y + a.target.height / 2) - (b.target.y + b.target.height / 2));
+
+    arranged.forEach((e, i) => {
+      const sourceCx = source.x + source.width / 2;
+      const targetCx = e.target.x + e.target.width / 2;
+      const toRight = targetCx >= sourceCx;
+      const sx = toRight ? source.x + source.width : source.x;
+      const tx = toRight ? e.target.x : e.target.x + e.target.width;
+      const sy = source.y + source.height / 2;
+      const ty = e.target.y + e.target.height / 2;
+      const sign = toRight ? 1 : -1;
+      const trunkX = sx + sign * 24;
+      const path =
+        arranged.length === 1 && Math.abs(ty - sy) < 1
+          ? `M ${sx} ${sy} L ${tx} ${ty}`
+          : `M ${sx} ${sy} L ${trunkX} ${sy} L ${trunkX} ${ty} L ${tx} ${ty}`;
+      const style = styleByPair.get(`${e.targetId}->${e.sourceId}`) ?? {
+        lineWidth: 2,
+        stroke: '#666666',
+        opacity: 0.95,
+        strokeDasharray: '',
+      };
+      edges.push({
+        id: `te_${sourceUid}_${i}`,
+        sourceUid: e.sourceUid,
+        targetUid: e.targetUid,
+        path,
+        lineWidth: style.lineWidth,
+        stroke: style.stroke,
+        opacity: style.opacity,
+        strokeDasharray: style.strokeDasharray,
+      });
+    });
+  });
+
+  return { nodes, edges };
+});
+
+const nodeViews = computed(() => layoutResult.value.nodes);
+const edgeViews = computed(() => layoutResult.value.edges);
+
+const bounds = computed(() => {
+  const nodes = nodeViews.value;
+  if (!nodes.length) return { minX: 0, minY: 0, maxX: 960, maxY: 540 };
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
   let maxX = Number.NEGATIVE_INFINITY;
   let maxY = Number.NEGATIVE_INFINITY;
-  nodes.forEach((node) => {
-    minX = Math.min(minX, node.x);
-    minY = Math.min(minY, node.y);
-    maxX = Math.max(maxX, node.x + node.width);
-    maxY = Math.max(maxY, node.y + node.height);
+  nodes.forEach((n) => {
+    minX = Math.min(minX, n.x);
+    minY = Math.min(minY, n.y);
+    maxX = Math.max(maxX, n.x + n.width);
+    maxY = Math.max(maxY, n.y + n.height);
   });
   return { minX, minY, maxX, maxY };
 });
 
-const boardPadding = 48;
-const boardOffsetX = computed(() => boardPadding - bounds.value.minX);
-const boardOffsetY = computed(() => boardPadding - bounds.value.minY);
-const boardWidth = computed(() => Math.max(960, Math.ceil(bounds.value.maxX - bounds.value.minX + boardPadding * 2)));
-const boardHeight = computed(() => Math.max(520, Math.ceil(bounds.value.maxY - bounds.value.minY + boardPadding * 2)));
+const boardWidth = computed(() => Math.max(960, Math.ceil(bounds.value.maxX + 60)));
+const boardHeight = computed(() => Math.max(520, Math.ceil(bounds.value.maxY + 60)));
 
-const nodeViews = computed(() =>
-  rawNodeViews.value.map((n) => ({
-    ...n,
-    x: n.x + boardOffsetX.value,
-    y: n.y + boardOffsetY.value,
-  })),
-);
+function spriteWrapStyle(icon: Extract<IconVisual, { kind: 'sprite' }>) {
+  return {
+    backgroundColor: icon.color ?? 'transparent',
+  };
+}
 
-const nodeViewById = computed(() => new Map(nodeViews.value.map((node) => [node.id, node] as const)));
-
-const edgeViews = computed<EdgeView[]>(() => {
-  return props.edges
-    .map((edge, index) => {
-      const source = nodeViewById.value.get(edge.source);
-      const target = nodeViewById.value.get(edge.target);
-      if (!source || !target) return null;
-
-      const leftToRight = source.x <= target.x;
-      const startX = leftToRight ? source.x + source.width - 8 : source.x + 8;
-      const endX = leftToRight ? target.x + 8 : target.x + target.width - 8;
-      const startY = source.y + source.height * 0.5;
-      const endY = target.y + target.height * 0.5;
-      const dx = Math.max(42, Math.abs(endX - startX) * 0.35);
-      const cp1 = { x: startX + (leftToRight ? dx : -dx), y: startY };
-      const cp2 = { x: endX - (leftToRight ? dx : -dx), y: endY };
-      const path = `M ${startX} ${startY} C ${cp1.x} ${cp1.y}, ${cp2.x} ${cp2.y}, ${endX} ${endY}`;
-      const mid = cubicPointAt(0.5, { x: startX, y: startY }, cp1, cp2, { x: endX, y: endY });
-
-      const style = styleObject(edge.style);
-      const lineWidth = Math.max(1, finiteOr(style.strokeWidth, 2));
-      const stroke = typeof style.stroke === 'string' && style.stroke.trim() ? style.stroke : '#636f7f';
-      const opacity = Math.max(0.1, Math.min(1, finiteOr(style.opacity, 0.95)));
-
-      return {
-        id: edge.id,
-        markerId: `fresky-edge-arrow-${index}`,
-        path,
-        lineWidth,
-        stroke,
-        opacity,
-        strokeDasharray: parseDash(style.strokeDasharray),
-        label: typeof edge.label === 'string' ? edge.label : '',
-        labelX: mid.x,
-        labelY: mid.y,
-      } satisfies EdgeView;
-    })
-    .filter((v): v is NonNullable<typeof v> => v !== null);
-});
+function spriteImageStyle(icon: Extract<IconVisual, { kind: 'sprite' }>, targetSize: number) {
+  const scale = targetSize / icon.size;
+  return {
+    width: `${icon.size}px`,
+    height: `${icon.size}px`,
+    backgroundImage: `url(${icon.url})`,
+    backgroundRepeat: 'no-repeat',
+    backgroundPosition: icon.position,
+    transform: `scale(${scale})`,
+    transformOrigin: 'top left',
+  };
+}
 
 const viewportEl = ref<HTMLElement | null>(null);
 const zoom = ref(1);
@@ -434,7 +726,7 @@ function onWheel(evt: WheelEvent) {
 function onPointerDown(evt: PointerEvent) {
   if (evt.button !== 0) return;
   const target = evt.target as HTMLElement | null;
-  if (target?.closest('.fresky-node')) return;
+  if (target?.closest('.fresky-node') || target?.closest('.fresky-flow__toolbar')) return;
   hasInteracted.value = true;
   isPanning.value = true;
   panPointerId = evt.pointerId;
@@ -653,6 +945,23 @@ onBeforeUnmount(() => {
   width: 50px;
   height: 50px;
   object-fit: contain;
+}
+
+.fresky-node__sprite-wrap {
+  width: 50px;
+  height: 50px;
+  overflow: hidden;
+  border-radius: 6px;
+}
+
+.fresky-node__sprite-wrap--small {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+}
+
+.fresky-node__sprite-image {
+  background-repeat: no-repeat;
 }
 
 .fresky-node__icon-fallback {
