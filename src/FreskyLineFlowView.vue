@@ -447,6 +447,14 @@ const baseNodeById = computed(() => {
   return map;
 });
 
+const orderYById = computed(() => {
+  const map = new Map<string, number>();
+  props.nodes.forEach((node) => {
+    map.set(node.id, finiteOr(node.position?.y, 0));
+  });
+  return map;
+});
+
 const inByTarget = computed(() => {
   const map = new Map<string, string[]>();
   props.nodes.forEach((n) => map.set(n.id, []));
@@ -454,7 +462,9 @@ const inByTarget = computed(() => {
     if (!map.has(edge.target) || !baseNodeById.value.has(edge.source)) return;
     (map.get(edge.target) ?? []).push(edge.source);
   });
-  map.forEach((arr) => arr.sort((a, b) => a.localeCompare(b)));
+  map.forEach((arr) =>
+    arr.sort((a, b) => (orderYById.value.get(a) ?? 0) - (orderYById.value.get(b) ?? 0)),
+  );
   return map;
 });
 
@@ -518,15 +528,15 @@ const layoutResult = computed(() => {
   };
   walk(root);
 
-  const CellWidth = 176;
-  const CellHeight = 96;
+  const CellWidth = 184;
+  const CellHeight = 78;
   const LeftPad = 20;
   const TopPad = 24;
 
   const nodes: NodeView[] = flatTree.map((t) => {
     const base = baseNodeById.value.get(t.id)!;
-    const x = LeftPad + (maxDepth - t.depth) * CellWidth + (base.kind === 'machine' ? 72 : 8);
-    const y = TopPad + t.position * CellHeight + (base.kind === 'machine' ? 12 : 0);
+    const x = LeftPad + (maxDepth - t.depth) * CellWidth + (base.kind === 'machine' ? 92 : 8);
+    const y = TopPad + t.position * CellHeight + (base.kind === 'machine' ? 8 : 0);
     return {
       uid: t.uid,
       id: t.id,
@@ -665,7 +675,8 @@ const isPanning = ref(false);
 const hasInteracted = ref(false);
 
 const stageStyle = computed(() => ({
-  transform: `translate(${panX.value}px, ${panY.value}px) scale(${zoom.value})`,
+  transform: `translate(${panX.value}px, ${panY.value}px)`,
+  zoom: `${zoom.value}`,
 }));
 
 let panPointerId: number | null = null;
@@ -911,6 +922,8 @@ onBeforeUnmount(() => {
   width: 32px;
   height: 32px;
   object-fit: contain;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
 }
 
 .fresky-node__machine-icon-fallback {
@@ -945,6 +958,8 @@ onBeforeUnmount(() => {
   width: 50px;
   height: 50px;
   object-fit: contain;
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
 }
 
 .fresky-node__sprite-wrap {
